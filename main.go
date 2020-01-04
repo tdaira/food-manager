@@ -2,74 +2,80 @@ package main
 
 import (
 	"fmt"
-	"time"
-
-	"gobot.io/x/gobot"
-	"gobot.io/x/gobot/drivers/gpio"
+	"github.com/tdaira/food-manager/device"
 	"gobot.io/x/gobot/platforms/raspi"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
-type Direction int
+func main() {
+	// Init RaspberryPi adaptor.
+	adaptor := raspi.NewAdaptor()
 
-const (
-	Forward Direction = iota
-	Backward
-)
+	// Turn on LED.
+	led := device.NewLED(adaptor, "29")
+	err := led.ON()
+	if err != nil {
+		log.Fatal(err)
+	}
 
-func (d Direction) String() string {
-	switch d {
-	case Forward:
-		return "forward"
-	case Backward:
-		return "backward"
-	default:
-		return "forward"
+	// Run Motor.
+	motor := device.NewMotor(adaptor, 20*time.Millisecond)
+	motor.Run()
+
+	// Set signal handler for device termination.
+	setSignalHandler(led, motor)
+
+	// Read switch value and change motor direction.
+	for {
+		val1, err := adaptor.DigitalRead("19")
+		if err != nil {
+			panic(err)
+		}
+		val2, err := adaptor.DigitalRead("21")
+		if err != nil {
+			panic(err)
+		}
+		if val1 == 1 {
+			motor.SetDirection(true)
+		}
+		if val2 == 1 {
+			motor.SetDirection(false)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-func main() {
-	adaptor := raspi.NewAdaptor()
-	stepper := gpio.NewStepperDriver(adaptor, [4]string{"31", "33", "35", "37"}, gpio.StepperModes.DualPhaseStepping, 2048)
-	direction := Forward
-	err := stepper.SetSpeed(5)
-	if err != nil {
-		fmt.Printf("set speed error: %+v", err)
-		return
-	}
-	err = stepper.SetDirection(Forward.String())
-	if err != nil {
-		fmt.Printf("set direction error: %+v", err)
-		return
-	}
-	err = stepper.Run()
-	if err != nil {
-		fmt.Printf("stepper execution error: %+v", err)
-		return
-	}
+func setSignalHandler(led *device.LED, motor *device.Motor) {
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT)
 
-	work := func() {
-		gobot.Every(5*time.Second, func() {
-			if direction == Forward {
-				direction = Backward
-			} else {
-				direction = Forward
+	go func() {
+		for {
+			s := <-signalChan
+			switch s {
+			case syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT:
+				err := led.OFF()
+				if err != nil {
+					log.Fatal(err)
+				}
+				err = motor.Stop()
+				if err != nil {
+					log.Fatal(err)
+				}
+				os.Exit(0)
+
+			default:
+				fmt.Println("Unknown signal.")
+				os.Exit(1)
 			}
-			err := stepper.SetDirection(direction.String())
-			if err != nil {
-				fmt.Printf("stepper execution error: %+v", err)
-			}
-		})
-	}
-
-	robot := gobot.NewRobot("blinkBot",
-		[]gobot.Connection{adaptor},
-		[]gobot.Device{stepper},
-		work,
-	)
-
-	err = robot.Start()
-	if err != nil {
-		fmt.Printf("bot execution error: %+v", err)
-		return
-	}
+		}
+	}()
 }
