@@ -3,13 +3,19 @@ package main
 import (
 	"fmt"
 	"github.com/tdaira/food-manager/device"
+	"github.com/tdaira/food-manager/gcloud"
 	"gobot.io/x/gobot/platforms/raspi"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 )
+
+var stepperSleep = 100 * time.Millisecond // msec
+var cameraSleep = 10 * time.Second        // sec
 
 func main() {
 	// Init RaspberryPi adaptor.
@@ -23,29 +29,48 @@ func main() {
 	}
 
 	// Run Motor.
-	motor := device.NewMotor(adaptor, 20*time.Millisecond)
+	motor := device.NewMotor(adaptor, 50*time.Millisecond)
 	motor.Run()
+
+	// Init cloud Storage.
+	storage, err := gcloud.NewStorage("food_watcher")
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Set signal handler for device termination.
 	setSignalHandler(led, motor)
 
 	// Read switch value and change motor direction.
 	for {
-		val1, err := adaptor.DigitalRead("19")
+		for i := 0; i < int(cameraSleep/stepperSleep); i++ {
+			val1, err := adaptor.DigitalRead("19")
+			if err != nil {
+				panic(err)
+			}
+			val2, err := adaptor.DigitalRead("21")
+			if err != nil {
+				panic(err)
+			}
+			if val1 == 1 {
+				motor.SetDirection(true)
+			}
+			if val2 == 1 {
+				motor.SetDirection(false)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		motor.Stop()
+		path := createPath()
+		err := takePhoto(path)
 		if err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
-		val2, err := adaptor.DigitalRead("21")
+		storage.Upload(path)
 		if err != nil {
-			panic(err)
+			log.Fatal(err)
 		}
-		if val1 == 1 {
-			motor.SetDirection(true)
-		}
-		if val2 == 1 {
-			motor.SetDirection(false)
-		}
-		time.Sleep(100 * time.Millisecond)
+		motor.Run()
 	}
 }
 
@@ -78,4 +103,15 @@ func setSignalHandler(led *device.LED, motor *device.Motor) {
 			}
 		}
 	}()
+}
+
+func createPath() string {
+	now := time.Now()
+	secs := now.Unix()
+	return "/tmp/" + strconv.Itoa(int(secs)) + ".jpg"
+}
+
+func takePhoto(path string) error {
+	log.Print("Take photo: " + path)
+	return exec.Command("raspistill", "-o", path).Run()
 }

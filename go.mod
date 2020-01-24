@@ -3,6 +3,7 @@ module github.com/tdaira/food-manager
 go 1.13
 
 require (
+	cloud.google.com/go/storage v1.4.0
 	github.com/creack/goselect v0.1.1 // indirect
 	github.com/mattn/go-isatty v0.0.11 // indirect
 	github.com/nats-io/jwt v0.3.2 // indirect
